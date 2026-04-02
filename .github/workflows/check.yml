@@ -1,0 +1,28 @@
+name: Hotel Availability Check
+
+on:
+  schedule:
+    # 1時間おきに実行する設定（UTC時間なので注意）
+    - cron: '0 * * * *'
+  workflow_dispatch: # 手動で動かすボタンも作る
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run script
+        env:
+          # DiscordのURLを安全に読み込む設定
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python main.py
