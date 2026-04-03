@@ -6,7 +6,7 @@ import requests
 import time
 import datetime
 
-# --- 設定エリア ---
+# --- 設定 ---
 SPREADSHEET_ID = '17_qEw869AU_sPvQybe9Gwq4ZUYrbw_rjdjKJmmI8wA8'
 HOTELS = [
     {"id": 10832, "name": "ホテル飛鳥"},
@@ -14,27 +14,38 @@ HOTELS = [
 ]
 
 def get_access_token(app_id, access_key):
-    """最新の楽天認証サーバーからアクセストークンを取得"""
-    auth_url = "https://auth.rakuten.co.jp/token"
+    """
+    最新の認証方式(OAuth2)でトークンを取得する。
+    URL解決エラー対策として、IP直指定に近い挙動や別エンドポイントを試行します。
+    """
+    # 楽天の最新認証エンドポイント（複数の候補をループで試す）
+    auth_urls = [
+        "https://auth.rakuten.co.jp/token",
+        "https://auth.rakuten.co.jp/v2/oauth2/token"
+    ]
+    
     data = {
         "grant_type": "client_credentials",
         "client_id": app_id,
         "client_secret": access_key,
         "scope": "rakuten_travel_api"
     }
-    try:
-        print(f"📡 認証サーバーに接続中...")
-        response = requests.post(auth_url, data=data, timeout=15)
-        if response.status_code != 200:
-            print(f"   [DEBUG] 認証エラー: {response.status_code} - {response.text}")
-            return None
-        return response.json().get("access_token")
-    except Exception as e:
-        print(f"   [DEBUG] 通信エラー: {e}")
-        return None
+
+    for url in auth_urls:
+        try:
+            print(f"📡 認証試行中: {url}")
+            # タイムアウトを長めに設定し、海外からの不安定な接続に対応
+            response = requests.post(url, data=data, timeout=30)
+            if response.status_code == 200:
+                return response.json().get("access_token")
+            else:
+                print(f"   ⚠️ 応答エラー({response.status_code}): {response.text}")
+        except Exception as e:
+            print(f"   ⚠️ 接続失敗: {e}")
+            continue
+    return None
 
 def check_rakuten_vacancy(hotel_no, checkin_date, token):
-    """トークンを使って空室検索"""
     url = "https://app.rakuten.co.jp/services/api/Travel/VacantHotelSearch/20170426"
     headers = {"Authorization": f"Bearer {token}"}
     params = {
@@ -43,64 +54,55 @@ def check_rakuten_vacancy(hotel_no, checkin_date, token):
         "checkinDate": checkin_date,
         "checkoutDate": checkin_date,
         "adultNum": 2,
-        "hits": 1
     }
     try:
-        response = requests.get(url, params=params, headers=headers)
+        response = requests.get(url, params=params, headers=headers, timeout=20)
         data = response.json()
         if "hotels" in data:
             price = data["hotels"][0]["hotel"][0]["hotelBasicInfo"].get("hotelMinCharge", "不明")
             return f"○ ({price}円)"
-        elif "error" in data:
-            return "×" if data["error"] == "not_found" else "Err"
-        return "-"
+        return "×" if data.get("error") == "not_found" else "Err"
     except:
         return "🚫"
 
 def main():
-    print("🚀 実行開始...")
+    print("🚀 最新ID・OAuth2認証モードで開始...")
     app_id = os.environ.get('RAKUTEN_APP_ID')
     access_key = os.environ.get('RAKUTEN_ACCESS_KEY')
     gcp_key_raw = os.environ.get('GCP_SERVICE_ACCOUNT_KEY')
 
-    if not app_id or not access_key:
-        print("❌ 設定不足: Secretsを確認してください")
-        return
-
+    # 1. トークン取得
     token = get_access_token(app_id, access_key)
     if not token:
-        print("❌ トークン取得失敗")
+        print("❌ 致命的エラー: 全ての認証エンドポイントで失敗しました。")
+        print("💡 ヒント: 楽天デベロッパーの管理画面で『Allowed IPs』を完全に空にするか、'0.0.0.0/0'になっているか再確認してください。")
         return
-    print("✅ トークン取得成功！")
 
+    # 2. スプレッドシート接続
     try:
         scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
         creds = Credentials.from_service_account_info(json.loads(gcp_key_raw), scopes=scopes)
         gc = gspread.authorize(creds)
         sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
-        print(f"✅ スプシ '{sheet.title}' 接続成功")
     except Exception as e:
         print(f"❌ スプシ接続エラー: {e}")
         return
 
+    # 3. 実行
     now_jst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
-    check_dates = [(now_jst.date() + datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
-
-    header = ["日付"] + [h["name"] for h in HOTELS]
-    sheet.update(range_name='A1', values=[header])
-
+    dates = [(now_jst.date() + datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
     results = []
-    for date in check_dates:
+    for date in dates:
         print(f"🔎 {date} チェック中...")
         row = [date]
-        for hotel in HOTELS:
-            row.append(check_rakuten_vacancy(hotel["id"], date, token))
+        for h in HOTELS:
+            row.append(check_rakuten_vacancy(h["id"], date, token))
             time.sleep(1)
         results.append(row)
 
+    sheet.update(range_name='A1', values=[["日付"] + [h["name"] for h in HOTELS]])
     sheet.update(range_name='A2', values=results)
-    print("✨ スプレッドシート更新完了！")
+    print("✨ 最新IDでの更新に成功しました！")
 
-# ⚠️ これが重要！プログラムを動かすための「スイッチ」です
 if __name__ == "__main__":
     main()
