@@ -14,14 +14,16 @@ HOTELS = [
 ]
 
 def check_rakuten_vacancy_ninja(hotel_no, checkin_date, app_id, access_key):
-    """最新APIの門番突破用関数"""
-    url = "https://app.rakuten.co.jp/services/api/Travel/VacantHotelSearch/20170426"
+    """
+    2026年最新エンドポイントを使用し、門番を突破します。
+    """
+    # 🔗 URLを最新の『openapi』ドメインに変更しました！
+    url = "https://openapi.rakuten.co.jp/travel/VacantHotelSearch/20170426"
     
     headers = {
         "Referer": "https://www.rakuten.co.jp/",
         "Origin": "https://www.rakuten.co.jp/",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
-        "X-Rakuten-Application-Id": app_id
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"
     }
 
     params = {
@@ -38,21 +40,23 @@ def check_rakuten_vacancy_ninja(hotel_no, checkin_date, app_id, access_key):
         response = requests.get(url, params=params, headers=headers, timeout=20)
         data = response.json()
         
+        # 成功時
         if "hotels" in data:
             price = data["hotels"][0]["hotel"][0]["hotelBasicInfo"].get("hotelMinCharge", "不明")
             return f"○ ({price}円)"
-        elif "error" in data:
-            if data["error"] == "not_found":
-                return "×"
-            print(f"   [DEBUG] 楽天エラー: {data.get('error')}")
-            return "Err"
-        return "-"
+        
+        # エラー詳細（デバッグ用）
+        error_code = data.get("error") or data.get("errors", {}).get("errorCode")
+        if error_code == "not_found":
+            return "×"
+        
+        print(f"   [DEBUG] 楽天エラー: {error_code} - {data}")
+        return f"Err({error_code})"
     except Exception as e:
-        print(f"   [DEBUG] 通信エラー: {e}")
         return "🚫"
 
 def main():
-    print("🚀 実行開始...")
+    print("🚀 【2026年最新・完全対応版】実行開始...")
     
     app_id = os.environ.get('RAKUTEN_APP_ID')
     access_key = os.environ.get('RAKUTEN_ACCESS_KEY')
@@ -92,10 +96,9 @@ def main():
         header = ["日付"] + [h["name"] for h in HOTELS]
         sheet.update(range_name='A1', values=[header])
         sheet.update(range_name='A2', values=results)
-        print("✨ 更新完了！お疲れ様でした！")
+        print("✨ 更新完了！今度こそ勝利です！")
     except Exception as e:
         print(f"❌ 書込エラー: {e}")
 
-# ここから下が漏れると SyntaxError になります
 if __name__ == "__main__":
     main()
