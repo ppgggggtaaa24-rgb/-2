@@ -14,21 +14,16 @@ HOTELS = [
 ]
 
 def check_rakuten_vacancy_ninja(hotel_no, checkin_date, app_id, access_key):
-    """
-    最新API(openapi.rakuten.co.jp)の仕様に合わせ、
-    ヘッダー偽装と二重ID送信で門番を突破します。
-    """
+    """最新APIの門番突破用関数"""
     url = "https://app.rakuten.co.jp/services/api/Travel/VacantHotelSearch/20170426"
     
-    # 2026年最新の「門番突破用ヘッダー」
     headers = {
         "Referer": "https://www.rakuten.co.jp/",
         "Origin": "https://www.rakuten.co.jp/",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
-        "X-Rakuten-Application-Id": app_id  # ヘッダーにもIDを仕込む
+        "X-Rakuten-Application-Id": app_id
     }
 
-    # パラメータにIDとAccessKeyを両方入れる
     params = {
         "applicationId": app_id,
         "accessKey": access_key,
@@ -41,68 +36,66 @@ def check_rakuten_vacancy_ninja(hotel_no, checkin_date, app_id, access_key):
     
     try:
         response = requests.get(url, params=params, headers=headers, timeout=20)
-        
-        # ログに生の応答を表示（デバッグ用）
-        if response.status_code != 200:
-            print(f"   [DEBUG] 楽天からの応答({response.status_code}): {response.text}")
-
         data = response.json()
         
         if "hotels" in data:
-            hotel_info = data["hotels"][0]["hotel"][0]["hotelBasicInfo"]
-            price = hotel_info.get("hotelMinCharge", "不明")
+            price = data["hotels"][0]["hotel"][0]["hotelBasicInfo"].get("hotelMinCharge", "不明")
             return f"○ ({price}円)"
         elif "error" in data:
             if data["error"] == "not_found":
                 return "×"
-            return f"Err({data.get('error')})"
+            print(f"   [DEBUG] 楽天エラー: {data.get('error')}")
+            return "Err"
         return "-"
     except Exception as e:
         print(f"   [DEBUG] 通信エラー: {e}")
         return "🚫"
 
 def main():
-    print("🚀 【2026年最新版・門番突破モード】実行開始...")
+    print("🚀 実行開始...")
     
-    # GitHub Secrets から環境変数を読み込み
     app_id = os.environ.get('RAKUTEN_APP_ID')
     access_key = os.environ.get('RAKUTEN_ACCESS_KEY')
     gcp_key_raw = os.environ.get('GCP_SERVICE_ACCOUNT_KEY')
 
     if not app_id or not access_key:
-        print("❌ エラー: RAKUTEN_APP_ID または RAKUTEN_ACCESS_KEY が設定されていません。")
+        print("❌ Secretsの設定を確認してください")
         return
 
-    # 1. スプレッドシートに接続
+    # スプシ接続
     try:
         scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
         creds = Credentials.from_service_account_info(json.loads(gcp_key_raw), scopes=scopes)
         gc = gspread.authorize(creds)
         sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
-        print(f"✅ スプレッドシート '{sheet.title}' 接続成功")
+        print("✅ スプシ接続成功")
     except Exception as e:
         print(f"❌ スプシ接続エラー: {e}")
         return
 
-    # 2. 今日から7日分の日付を作成
+    # 日付作成
     now_jst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
-    check_dates = [(now_jst.date() + datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+    dates = [(now_jst.date() + datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
 
-    # 3. ホテルごとに空室をチェック
-    results_row = []
-    for date in check_dates:
-        print(f"🔎 {date} をチェック中...")
+    # 空室チェック
+    results = []
+    for date in dates:
+        print(f"🔎 {date} チェック中...")
         row = [date]
         for hotel in HOTELS:
-            status = check_rakuten_vacancy_ninja(hotel["id"], date, app_id, access_key)
-            row.append(status)
-            time.sleep(1) # API制限対策
-        results_row.append(row)
+            row.append(check_rakuten_vacancy_ninja(hotel["id"], date, app_id, access_key))
+            time.sleep(1)
+        results.append(row)
 
-    # 4. スプレッドシートを更新
+    # 書き込み
     try:
         header = ["日付"] + [h["name"] for h in HOTELS]
         sheet.update(range_name='A1', values=[header])
-        sheet.update(range_name='A2', values=results_row)
-        print("✨ すべてのデータが正常に反映されました！勝利です！")
-    except
+        sheet.update(range_name='A2', values=results)
+        print("✨ 更新完了！お疲れ様でした！")
+    except Exception as e:
+        print(f"❌ 書込エラー: {e}")
+
+# ここから下が漏れると SyntaxError になります
+if __name__ == "__main__":
+    main()
