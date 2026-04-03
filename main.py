@@ -15,10 +15,10 @@ HOTELS = [
 
 def check_rakuten_vacancy_ninja(hotel_no, checkin_date, app_id, access_key):
     """
-    2026年最新エンドポイントを使用し、門番を突破します。
+    2026年最新規格(openapi + ichibams)で空室検索を行います。
     """
-    # 🔗 URLを最新の『openapi』ドメインに変更しました！
-    url = "https://openapi.rakuten.co.jp/travel/VacantHotelSearch/20170426"
+    # 🔗 URLを最新の『openapi + ichibams』形式に修正しました
+    url = "https://openapi.rakuten.co.jp/ichibams/api/Travel/VacantHotelSearch/20170426"
     
     headers = {
         "Referer": "https://www.rakuten.co.jp/",
@@ -45,18 +45,20 @@ def check_rakuten_vacancy_ninja(hotel_no, checkin_date, app_id, access_key):
             price = data["hotels"][0]["hotel"][0]["hotelBasicInfo"].get("hotelMinCharge", "不明")
             return f"○ ({price}円)"
         
-        # エラー詳細（デバッグ用）
-        error_code = data.get("error") or data.get("errors", {}).get("errorCode")
-        if error_code == "not_found":
+        # エラー処理
+        error_code = data.get("error") or (data.get("errors", [{}])[0].get("errorCode") if isinstance(data.get("errors"), list) else None)
+        
+        if error_code == "not_found" or response.status_code == 404:
+            # 404でも「空室がない」という意味で返ってくる場合があります
             return "×"
         
-        print(f"   [DEBUG] 楽天エラー: {error_code} - {data}")
-        return f"Err({error_code})"
+        print(f"   [DEBUG] 楽天エラー: {response.status_code} - {data}")
+        return f"Err({response.status_code})"
     except Exception as e:
         return "🚫"
 
 def main():
-    print("🚀 【2026年最新・完全対応版】実行開始...")
+    print("🚀 【2026年最新・完全版】実行開始...")
     
     app_id = os.environ.get('RAKUTEN_APP_ID')
     access_key = os.environ.get('RAKUTEN_ACCESS_KEY')
@@ -77,11 +79,9 @@ def main():
         print(f"❌ スプシ接続エラー: {e}")
         return
 
-    # 日付作成
     now_jst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
     dates = [(now_jst.date() + datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
 
-    # 空室チェック
     results = []
     for date in dates:
         print(f"🔎 {date} チェック中...")
@@ -91,12 +91,11 @@ def main():
             time.sleep(1)
         results.append(row)
 
-    # 書き込み
     try:
         header = ["日付"] + [h["name"] for h in HOTELS]
         sheet.update(range_name='A1', values=[header])
         sheet.update(range_name='A2', values=results)
-        print("✨ 更新完了！今度こそ勝利です！")
+        print("✨ ついに！すべてのデータが反映されました！")
     except Exception as e:
         print(f"❌ 書込エラー: {e}")
 
