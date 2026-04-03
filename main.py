@@ -13,13 +13,31 @@ HOTELS = [
     {"id": 160534, "name": "ホテル日本海"},
 ]
 
-def check_rakuten_vacancy(hotel_no, checkin_date, access_key):
-    """最新のアクセスキー認証 (x-api-key) を使った空室チェック"""
+def get_access_token(app_id, access_key):
+    """Access Keyを使って、一時的な『引換券(トークン)』を発行する"""
+    auth_url = "https://auth.rakuten.co.jp/v2/oauth2/token"
+    data = {
+        "grant_type": "client_credentials",
+        "client_id": app_id,
+        "client_secret": access_key,
+        "scope": "rakuten_travel_api"
+    }
+    try:
+        # 楽天の認証サーバーに問い合わせ
+        res = requests.post(auth_url, data=data)
+        token_data = res.json()
+        return token_data.get("access_token")
+    except Exception as e:
+        print(f"   [DEBUG] トークン発行失敗: {e}")
+        return None
+
+def check_rakuten_vacancy(hotel_no, checkin_date, token):
+    """発行されたトークンを使って空室をチェックする"""
     url = "https://app.rakuten.co.jp/services/api/Travel/VacantHotelSearch/20170426"
     
-    # Zennの記事に基づいた最新のヘッダー設定
+    # 楽天が求めている『Bearer』形式でトークンを送る
     headers = {
-        "x-api-key": access_key
+        "Authorization": f"Bearer {token}"
     }
 
     params = {
@@ -32,7 +50,6 @@ def check_rakuten_vacancy(hotel_no, checkin_date, access_key):
     }
     
     try:
-        # 認証情報をヘッダーに入れて送信
         response = requests.get(url, params=params, headers=headers)
         data = response.json()
         
@@ -47,21 +64,27 @@ def check_rakuten_vacancy(hotel_no, checkin_date, access_key):
             return "Err"
         return "-"
     except Exception as e:
-        print(f"   [DEBUG] 通信エラー: {e}")
         return "🚫"
 
 def main():
-    print("🚀 最新アクセスキーモードで開始します...")
+    print("🚀 最強のOAuth2認証モードで開始します...")
 
-    # Secretsからキーを取得
+    # GitHub Secrets から取得
+    # ※RAKUTEN_APP_ID には「ハイフン入りの ID」
+    # ※RAKUTEN_ACCESS_KEY には「Access Key」を入れておいてください
+    app_id = os.environ.get('RAKUTEN_APP_ID')
     access_key = os.environ.get('RAKUTEN_ACCESS_KEY')
     gcp_key_raw = os.environ.get('GCP_SERVICE_ACCOUNT_KEY')
 
-    if not access_key:
-        print("❌ エラー: RAKUTEN_ACCESS_KEY が設定されていません")
+    # 1. 引換券（トークン）をゲットする
+    print("🔑 トークンを発行中...")
+    token = get_access_token(app_id, access_key)
+    if not token:
+        print("❌ トークンの発行に失敗しました。IDかAccess Keyが間違っている可能性があります。")
         return
+    print("✅ トークン発行成功！")
 
-    # スプレッドシート準備
+    # 2. スプシ接続
     try:
         scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
         creds = Credentials.from_service_account_info(json.loads(gcp_key_raw), scopes=scopes)
@@ -71,32 +94,27 @@ def main():
         print(f"❌ スプシ接続エラー: {e}")
         return
 
-    # 日付リスト (今日から7日間)
+    # 3. 日付と空室チェック
     now_jst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
     today = now_jst.date()
     check_dates = [(today + datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
-
-    # 見出し
-    header = ["日付"] + [h["name"] for h in HOTELS]
-    sheet.update(range_name='A1', values=[header])
 
     results_row = []
     for date in check_dates:
         print(f"🔎 {date} チェック中...")
         row = [date]
         for hotel in HOTELS:
-            # アクセスキーを使ってチェック
-            status = check_rakuten_vacancy(hotel["id"], date, access_key)
+            status = check_rakuten_vacancy(hotel["id"], date, token)
             row.append(status)
             time.sleep(1)
         results_row.append(row)
 
-    # 書き込み
+    # 4. スプシに書き込み
     try:
         sheet.update(range_name='A2', values=results_row)
-        print("✨ すべて完了しました！")
+        print("✨ 更新が完了しました！")
     except Exception as e:
-        print(f"❌ 書き込みエラー: {e}")
+        print(f"❌ 書込エラー: {e}")
 
 if __name__ == "__main__":
     main()
