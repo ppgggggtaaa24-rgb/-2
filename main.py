@@ -1,50 +1,93 @@
+import os
+import json
+import gspread
+from google.oauth2.service_account import Credentials
 import requests
 import time
-import os  # ← これを追加
+import datetime
 
-# --- 【設定】GitHubのSettingsで登録した名前を読み込む ---
-# ローカルでテストする時は、一時的にURLを直接入れてもOKです
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+# --- 1. 認証設定 ---
+# GitHub SecretsからJSON鍵を読み込む
+json_key_raw = os.environ.get('GCP_SERVICE_ACCOUNT_KEY')
+json_key = json.loads(json_key_raw)
 
-# 監視する宿ID（ユーザーが自由に変えられる部分）
-HOTEL_IDS = ["108739", "12345", "67890", "11111", "22222"] 
-CHECK_DATE = "2026-05-02" 
-THRESHOLD = 3 
+scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+creds = Credentials.from_service_account_info(json_key, scopes=scope)
+gc = gspread.authorize(creds)
 
-def check_status(hid, date):
-    url = f"https://hotel.travel.rakuten.co.jp/hotelinfo/plan/{hid}"
-    # 日付パラメータ（2026年5月2日）
-    params = {"hid_isDated": "1", "f_nen1": "2026", "f_tuki1": "5", "f_hi1": "2"}
-    headers = {"User-Agent": "Mozilla/5.0"}
+# --- 2. スプレッドシートの設定 ---
+# 先ほどメモしたシートIDをここに貼り付けてください
+SPREADSHEET_ID = '17_qEw869AU_sPvQybe9Gwq4ZUYrbw_rjdjKJmmI8wA8' 
+sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
+
+# 楽天APIキー
+RAKUTEN_APP_ID = os.environ.get('RAKUTEN_APP_ID')
+
+# --- 3. 監視する宿リスト (ID, 名前) ---
+HOTELS = [
+    {"id": 10832, "name": "ホテル飛鳥"},
+    {"id": 160534, "name": "ホテル日本海"},
+]
+
+def main():
+    today = datetime.date.today()
+    # とりあえずテストで直近7日分
+    CHECK_DATES = [(today + datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+
+    # スプシの見出し作成（最初だけ実行）
+    header = ["日付"] + [h["name"] for h in HOTELS]
+    sheet.update('A1', [header])
+
+    results_row = []
+    
+    # 日付ごとにループ
+    for i, date in enumerate(CHECK_DATES):
+        row = [date]
+        for hotel in HOTELS:
+            # 楽天APIで空室チェック（前回の関数と同じロジック）
+            status = check_rakuten_vacancy(hotel["id"], date) 
+            row.append(status)
+            time.sleep(1)
+        results_row.append(row)
+    
+    # まとめてスプレッドシートに書き込み
+    sheet.update(f'A2:C{len(CHECK_DATES)+1}', results_row)
+    print("スプレッドシートの更新が完了しました！")
+
+def check_rakuten_vacancy(hotel_no, checkin_date):
+    """楽天APIを使って特定の宿・日付の空室と価格を調べる関数"""
+    url = "https://app.rakuten.co.jp/services/api/Travel/VacantHotelSearch/20170426"
+    
+    # 楽天APIに送るパラメーター
+    params = {
+        "applicationId": RAKUTEN_APP_ID,
+        "format": "json",
+        "hotelNo": hotel_no,
+        "checkinDate": checkin_date,
+        "checkoutDate": checkin_date, # 1泊で計算
+        "adultNum": 2,               # 大人2名
+        "hits": 1                    # 1件取得
+    }
     
     try:
-        res = requests.get(url, params=params, headers=headers, timeout=10)
-        if "ご指定の条件に合うプランがありません" in res.text or "×" in res.text:
-            return "×"
-        return "○"
-    except:
-        return "ERR"
-
-def send_discord(msg):
-    if not DISCORD_WEBHOOK_URL:
-        print("URLが設定されていません")
-        return
-    payload = {"content": msg}
-    requests.post(DISCORD_WEBHOOK_URL, json=payload)
-
-# --- メイン処理 ---
-results = []
-full_count = 0
-
-for hid in HOTEL_IDS:
-    status = check_status(hid, CHECK_DATE)
-    results.append(f"宿ID {hid}: {status}")
-    if status == "×":
-        full_count += 1
-    time.sleep(3)
-
-if full_count >= THRESHOLD:
-    alert_msg = f" \n**【自動レベニュー監視】**\nターゲット日: `{CHECK_DATE}`\n"
-    alert_msg += f"競合 {full_count} 宿が満室です！価格を確認してください。 :money_with_wings:\n"
-    alert_msg += "```\n" + "\n".join(results) + "\n```"
-    send_discord(alert_msg)
+        response = requests.get(url, params=params)
+        data = response.json()
+        
+        # 1. 空室がある場合
+        if "hotels" in data:
+            # 最安値を抽出して「○(価格)」の形式にする
+            hotel_info = data["hotels"][0]["hotel"][0]["hotelBasicInfo"]
+            min_price = hotel_info.get("hotelMinCharge", "不明")
+            return f"○ ({min_price}円)"
+        
+        # 2. 満室またはエラーの場合
+        elif "error" in data:
+            if data["error"] == "not_found":
+                return "×" # 満室は「×」でスプシに書く
+            else:
+                return f"Err:{data.get('error')}"
+        
+        return "-" # その他不明
+            
+    except Exception as e:
+        return "🚫Err"
