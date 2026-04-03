@@ -1,6 +1,31 @@
-- name: Run script
+name: Hotel Vacancy Check
+
+on:
+  schedule:
+    - cron: '0 21 * * *' # 日本時間 朝6時に自動実行
+  workflow_dispatch:      # 手動実行ボタンを有効にする
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install gspread google-auth requests
+
+      - name: Run script
         env:
+          # プログラムが「ID」「アクセスキー」「スプシ用鍵」の3つを読み取れるように設定
           GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
-          RAKUTEN_APP_ID: ${{ secrets.RAKUTEN_APP_ID }}      # 追加！
+          RAKUTEN_APP_ID: ${{ secrets.RAKUTEN_APP_ID }}
           RAKUTEN_ACCESS_KEY: ${{ secrets.RAKUTEN_ACCESS_KEY }}
         run: python main.py
