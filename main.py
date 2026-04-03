@@ -5,6 +5,8 @@ from google.oauth2.service_account import Credentials
 import requests
 import time
 import datetime
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # --- 設定 ---
 SPREADSHEET_ID = '17_qEw869AU_sPvQybe9Gwq4ZUYrbw_rjdjKJmmI8wA8'
@@ -15,10 +17,10 @@ HOTELS = [
 
 def get_access_token(app_id, access_key):
     """
-    最新の認証方式(OAuth2)でトークンを取得する。
-    URL解決エラー対策として、IP直指定に近い挙動や別エンドポイントを試行します。
+    最新の認証方式(OAuth2)でトークンを取得。
+    海外サーバーからの不安定な接続に備え、リトライと長いタイムアウトを設定。
     """
-    # 楽天の最新認証エンドポイント（複数の候補をループで試す）
+    # 候補となるURLを複数用意
     auth_urls = [
         "https://auth.rakuten.co.jp/token",
         "https://auth.rakuten.co.jp/v2/oauth2/token"
@@ -31,17 +33,24 @@ def get_access_token(app_id, access_key):
         "scope": "rakuten_travel_api"
     }
 
+    # セッションを作成し、リトライ戦略を設定
+    session = requests.Session()
+    retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+    session.mount('https://', HTTPAdapter(max_retries=retries))
+
     for url in auth_urls:
         try:
-            print(f"📡 認証試行中: {url}")
-            # タイムアウトを長めに設定し、海外からの不安定な接続に対応
-            response = requests.post(url, data=data, timeout=30)
+            print(f"📡 認証サーバーへ接続試行中: {url}")
+            # 接続待ち(connect)と応答待ち(read)にたっぷり時間を取る
+            response = session.post(url, data=data, timeout=(15, 30))
+            
             if response.status_code == 200:
+                print("✅ 認証成功！")
                 return response.json().get("access_token")
             else:
-                print(f"   ⚠️ 応答エラー({response.status_code}): {response.text}")
+                print(f"   ⚠️ サーバー応答あり(拒否): {response.status_code} - {response.text}")
         except Exception as e:
-            print(f"   ⚠️ 接続失敗: {e}")
+            print(f"   ⚠️ 接続失敗(詳細): {e}")
             continue
     return None
 
@@ -66,7 +75,8 @@ def check_rakuten_vacancy(hotel_no, checkin_date, token):
         return "🚫"
 
 def main():
-    print("🚀 最新ID・OAuth2認証モードで開始...")
+    print("🚀 【最新規格】OAuth2認証プロセスを開始します...")
+    
     app_id = os.environ.get('RAKUTEN_APP_ID')
     access_key = os.environ.get('RAKUTEN_ACCESS_KEY')
     gcp_key_raw = os.environ.get('GCP_SERVICE_ACCOUNT_KEY')
@@ -74,8 +84,7 @@ def main():
     # 1. トークン取得
     token = get_access_token(app_id, access_key)
     if not token:
-        print("❌ 致命的エラー: 全ての認証エンドポイントで失敗しました。")
-        print("💡 ヒント: 楽天デベロッパーの管理画面で『Allowed IPs』を完全に空にするか、'0.0.0.0/0'になっているか再確認してください。")
+        print("❌ 致命的エラー: 認証サーバーに到達できませんでした。")
         return
 
     # 2. スプレッドシート接続
@@ -84,14 +93,16 @@ def main():
         creds = Credentials.from_service_account_info(json.loads(gcp_key_raw), scopes=scopes)
         gc = gspread.authorize(creds)
         sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
+        print(f"✅ スプレッドシート '{sheet.title}' に接続完了")
     except Exception as e:
         print(f"❌ スプシ接続エラー: {e}")
         return
 
-    # 3. 実行
+    # 3. 空室チェックと書き込み
     now_jst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
     dates = [(now_jst.date() + datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
     results = []
+    
     for date in dates:
         print(f"🔎 {date} チェック中...")
         row = [date]
@@ -100,9 +111,12 @@ def main():
             time.sleep(1)
         results.append(row)
 
-    sheet.update(range_name='A1', values=[["日付"] + [h["name"] for h in HOTELS]])
-    sheet.update(range_name='A2', values=results)
-    print("✨ 最新IDでの更新に成功しました！")
+    try:
+        sheet.update(range_name='A1', values=[["日付"] + [h["name"] for h in HOTELS]])
+        sheet.update(range_name='A2', values=results)
+        print("✨ すべての処理が成功しました！")
+    except Exception as e:
+        print(f"❌ 書き込みエラー: {e}")
 
 if __name__ == "__main__":
     main()
