@@ -1,0 +1,29 @@
+name: Hotel Inventory Update
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # 15分おきに自動実行
+  workflow_dispatch:        # 手動で動かすボタンを表示
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/checkout@v3
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install gspread google-auth requests
+
+      - name: Run script
+        env:
+          RAKUTEN_APP_ID: ${{ secrets.RAKUTEN_APP_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+        run: python main.py
